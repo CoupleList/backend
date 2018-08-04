@@ -1,0 +1,8 @@
+{
+  "hosting": {
+    "public": "app",
+    "ignore": [
+      ".gitignore"
+    ]
+  }
+}
