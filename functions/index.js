@@ -6,6 +6,7 @@ const spawn = require('child-process-promise').spawn;
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const cors = require('cors')({origin: true});
 
 admin.initializeApp(functions.config().firebase);
 
@@ -36,7 +37,7 @@ scaleProfileImage = (object) => {
   const metadata = {
     contentType: object.contentType,
   };
-  
+
   console.log('Creating temporary directory...');
 
   return mkdirp(path.dirname(tempFilePath)).then(() => {
@@ -60,7 +61,7 @@ scaleProfileImage = (object) => {
     }).then(() => {
       console.log('Profile image rotated.', tempFilePath);
       const resizedFilePath = object.name.replace(`_original_${rotationValue}`, '');
-      
+
       return bucket.upload(tempFilePath, {
         destination: resizedFilePath,
         metadata: metadata,
@@ -69,13 +70,66 @@ scaleProfileImage = (object) => {
 
         return bucket.file(object.name).delete().then(() => {
           console.log('Original profile image deleted.');
-          
+
           return true;
         });
       });
     }).then(() => fs.unlinkSync(tempFilePath));
   });
-}
+};
+
+verifyUserHasPrivileges = (uid, type = null) => {
+  return new Promise((resolve, reject) => {
+    switch (type) {
+      case 'analytics':
+        admin.database().ref(`privileges/analytics/${uid}`).once('value', snapshot => {
+          if (snapshot.exists() && snapshot.val() === true) {
+            resolve();
+          } else {
+            reject();
+          }
+        });
+        break;
+      default:
+        reject();
+        break;
+    }
+  });
+};
+
+fetchLists = () => {
+  return new Promise((resolve, reject) => {
+    admin.database().ref(`/lists`).once('value', snapshot => {
+      let lists = [];
+
+      snapshot.forEach(childSnapshot => {
+        let activities = 0;
+        let completedActivities = 0;
+
+        if (childSnapshot.child('activities').exists()) {
+          childSnapshot.child('activities').forEach(activity => {
+            activities++;
+            if (activity.child('done').val()) {
+              completedActivities++;
+            }
+          });
+        }
+
+        lists.push({
+          id: childSnapshot.key,
+          registeredUsers: childSnapshot.child('tokens').exists() ? childSnapshot.child('tokens').numChildren() : 0,
+          activities,
+          completedActivities
+        });
+      });
+
+      resolve({
+        count: snapshot.numChildren(),
+        lists
+      });
+    });
+  });
+};
 
 exports.handleActivityEvent = functions.database.ref('lists/{list}/activities/{activity}').onWrite((change, context) => {
   let list = context.params.list;
@@ -95,7 +149,7 @@ exports.handleActivityEvent = functions.database.ref('lists/{list}/activities/{a
           content_available: 'true'
         }
       };
-      
+
       writeHistory(list, change.before.val(), change.after.val(), 1);
 
       sendNotification(tokens, payload).then((response) => {
@@ -137,7 +191,7 @@ exports.handleActivityEvent = functions.database.ref('lists/{list}/activities/{a
             content_available: 'true'
           }
         };
-        
+
         writeHistory(list, change.before.val(), change.after.val(), 2);
 
         sendNotification(tokens, payload).then((response) => {
@@ -163,7 +217,7 @@ exports.handleFeedbackEvent = functions.database.ref('feedback/{user}/{feedback}
           content_available: 'false'
         }
       };
-  
+
       return sendNotification(token, payload).then((response) => {
         console.log('Message sent:', response);
         return true;
@@ -179,12 +233,31 @@ exports.handleFeedbackEvent = functions.database.ref('feedback/{user}/{feedback}
 });
 
 exports.handleImageUploadEvent = functions.storage.object().onFinalize((object) => {
-  if (object.name.startsWith('profileImages/') 
-      && object.name.includes('_original')
-      && object.name.endsWith('.JPG')
-      && object.contentType.startsWith('image/')) {
+  if (object.name.startsWith('profileImages/')
+    && object.name.includes('_original')
+    && object.name.endsWith('.JPG')
+    && object.contentType.startsWith('image/')) {
     return scaleProfileImage(object);
   }
 
   return false;
+});
+
+exports.lists = functions.https.onRequest((req, res) => {
+  cors(req, res, () => {
+    const bearer = req.headers.authorization.split(' ')[1];
+    admin.auth().verifyIdToken(bearer)
+      .then(decodedToken => {
+        verifyUserHasPrivileges(decodedToken.uid, 'analytics')
+          .then(() => {
+            fetchLists()
+              .then(data => res.status(200).send(data))
+              .catch(err => res.status(500).send(err));
+          })
+          .catch(() => res.status(401).send('Account does not have privileges to access this data.'));
+      }).catch((err) => {
+        console.error(err);
+        res.status(401).send('Unable to access this data.');
+    });
+  });
 });
