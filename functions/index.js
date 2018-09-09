@@ -17,7 +17,7 @@ sendNotification = (tokens, payload) => {
       reject(err);
     });
   });
-}
+};
 
 writeHistory = (list, before, after, state) => {
   let key = admin.database().ref(`/lists/${list}/history/`).push().key;
@@ -27,7 +27,7 @@ writeHistory = (list, before, after, state) => {
     state: state,
     time: new Date().getTime()
   });
-}
+};
 
 scaleProfileImage = (object) => {
   const bucket = gcs.bucket(object.bucket);
