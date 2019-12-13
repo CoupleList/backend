@@ -1,8 +1,8 @@
 import * as bodyparser from "body-parser";
-import * as cors from "cors";
-import * as express from "express";
+import cors from "cors";
+import express, { Application } from "express";
 
-const app: express.Application = express();
+const app: Application = express() as Application;
 
 app.use(bodyparser.urlencoded({ extended: false }));
 app.use(bodyparser.json());
